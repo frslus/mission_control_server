@@ -4,10 +4,7 @@ import threading
 import json
 import numpy as np
 import sounddevice as sd
-from MCPTesting import DEFAULT_COMMAND_SET, ServerInterruptMockup
-
-# global variable is temporary solution
-global MAIN_SERVER
+from test.MCPTesting import DEFAULT_COMMAND_SET, ServerInterruptMockup
 
 
 class MainServer:
@@ -21,12 +18,49 @@ class MainServer:
     :ivar __command_set: a list of commands sent from client to the server
     :type __command_set: list[Callable]"""
 
+    # A reference for running MainServer instance
+    MAIN_SERVER = None
+
     def __init__(self):
         self.STOP_SERVER = threading.Event()
         self.__max_users = 2
         self.__active_users = [None for _ in range(self.__max_users)]
         self.__active_threads = set()
         self.__command_set = DEFAULT_COMMAND_SET
+        MainServer.MAIN_SERVER = self
+
+    def initiate_server(self) -> None:
+        """This function is called once when the server starts.
+        :return None:"""
+        print("Server started")
+        server_listener = ServerListener()
+        server_listener.start()
+        self.add_thread(server_listener)
+        # for testing purposes only
+        server_interrupt_mockup = ServerInterruptMockup(MainServer.MAIN_SERVER)
+        server_interrupt_mockup.start()
+        self.add_thread(server_interrupt_mockup)
+
+    def main_server_loop(self) -> None:
+        """This function is repeated in loop when server is running.
+        :return None:"""
+        pass
+
+    def close_server(self) -> None:
+        """This function is called once when the server shuts down.
+        :return None:"""
+        self.kill_all_threads()
+        for thread in self.__active_threads:
+            thread.join()
+        print("Server closed")
+
+    def run(self) -> None:
+        """The body of the server, consists of initializing function, main loop and closing function.
+        :return None:"""
+        self.initiate_server()
+        while not self.STOP_SERVER.is_set():
+            self.main_server_loop()
+        self.close_server()
 
     def add_thread(self, thread):
         """Adds a new active thread."""
@@ -69,12 +103,11 @@ def user_handler(websocket: websockets.sync.server.ServerConnection) -> None:
     :param websocket: an object representing a connection with one client
     :type websocket: websockets.sync.server.ServerConnection
     :return None:"""
-    global MAIN_SERVER
     print("Client connected")
     instruction_list = DEFAULT_COMMAND_SET
     try:
         for message in websocket:
-            if MAIN_SERVER.STOP_SERVER.is_set():
+            if MainServer.MAIN_SERVER.STOP_SERVER.is_set():
                 raise InterruptedError()
             if isinstance(message, str):
                 message = json.loads(message)
@@ -98,44 +131,9 @@ def user_handler(websocket: websockets.sync.server.ServerConnection) -> None:
         print("Disconnected due to server stopping")
 
 
-def initiate_server() -> None:
-    """This function is called once when the server starts.
-    :return None:"""
-    global MAIN_SERVER
-    print("Server started")
-    server_listener = ServerListener()
-    server_listener.start()
-    MAIN_SERVER.add_thread(server_listener)
-    # for testing purposes only
-    server_interrupt_mockup = ServerInterruptMockup(MAIN_SERVER)
-    server_interrupt_mockup.start()
-    MAIN_SERVER.add_thread(server_interrupt_mockup)
-
-
-def main_server_loop() -> None:
-    """This function is repeated in loop when server is running.
-    :return None:"""
-    global MAIN_SERVER
-    pass
-
-
-def close_server() -> None:
-    """This function is called once when the server shuts down.
-    :return None:"""
-    global MAIN_SERVER
-    MAIN_SERVER.kill_all_threads()
-    print("Server closed")
-
-
 def main() -> None:
-    """The body of the server, consists of initializing function, main loop and closing function.
-    :return None:"""
-    global MAIN_SERVER
-    MAIN_SERVER = MainServer()
-    initiate_server()
-    while not MAIN_SERVER.STOP_SERVER.is_set():
-        main_server_loop()
-    close_server()
+    control_panel_server = MainServer()
+    control_panel_server.run()
 
 
 if __name__ == "__main__":

@@ -25,7 +25,7 @@ class ServerInterruptMockup(threading.Thread):
         self.main_server = main_server
 
     def run(self):
-        time.sleep(60)
+        time.sleep(10)
         self.main_server.STOP_SERVER.set()
 
     def stop(self):
