@@ -5,11 +5,12 @@ import json
 import numpy as np
 import sounddevice as sd
 from test.MCPTesting import DEFAULT_COMMAND_SET, ServerInterruptMockup
+from src.MCPClient import ServerUser
 
 
 class MainServer:
     """An object representing server.
-    :ivar __max_users: the maximal number of clients server can handle at a time
+    :ivar __max_users: the maximal number of users server can handle at a time
     :type __max_users: int
     :ivar __active_users: an array of references to active users object instances TODO
     :type __active_users: list[Any] TODO
@@ -27,6 +28,7 @@ class MainServer:
         self.__active_users = [None for _ in range(self.__max_users)]
         self.__active_threads = set()
         self.__command_set = DEFAULT_COMMAND_SET
+        self.communication_port = 9000
         MainServer.MAIN_SERVER = self
 
     def initiate_server(self) -> None:
@@ -62,21 +64,47 @@ class MainServer:
             self.main_server_loop()
         self.close_server()
 
-    def add_thread(self, thread):
-        """Adds a new active thread."""
+    def add_thread(self, thread) -> None:
+        """Adds a new active thread.
+        :return None:"""
         self.__active_threads.add(thread)
 
-    def remove_thread(self, thread):
-        """Removes an active thread."""
+    def remove_thread(self, thread) -> None:
+        """Removes an active thread.
+        :return None:"""
         if thread in self.__active_threads:
             self.__active_threads.remove(thread)
         else:
             pass
 
-    def kill_all_threads(self):
-        """Stops all active threads (most probably during server shutdown)."""
+    def kill_all_threads(self) -> None:
+        """Stops all active threads (most probably during server shutdown).
+        :return None:"""
         for thread in self.__active_threads:
             thread.stop()
+
+    def add_user(self, user: ServerUser) -> int:
+        """Adds a new active user to the list. If no free slot, raises an OverflowError.
+        :param user: the user to add
+        :type user: ServerUser
+        :return: user id on this server
+        :rtype: int"""
+        for i in range(self.__max_users):
+            if self.__active_users[i] is None:
+                self.__active_users[i] = user
+                return i
+        raise OverflowError("Too many users")
+
+    def remove_user(self, user: ServerUser) -> None:
+        """Removes active user, freeing the slot. If no such user exists, raises a KeyError.
+        :param user: the user to remove
+        :type user: ServerUser
+        :return: None"""
+        for i in range(self.__max_users):
+            if type(self.__active_users[i]) == ServerUser and self.__active_users[i].id == user.id:
+                self.__active_users[i] = None
+                return
+        raise KeyError(f"User {user.id} not found")
 
 
 class ServerListener(threading.Thread):
@@ -88,12 +116,16 @@ class ServerListener(threading.Thread):
         super().__init__()
         self.server_listener = None
 
-    def run(self):
-        with serve(user_handler, "localhost", 9000) as server_listener:
+    def run(self) -> None:
+        """A program thread running after start.
+        :return None:"""
+        with serve(user_handler, "localhost", MainServer.MAIN_SERVER.communication_port) as server_listener:
             self.server_listener = server_listener
             server_listener.serve_forever()
 
-    def stop(self):
+    def stop(self) -> None:
+        """A program thread doing when server is stopped.
+        :return None:"""
         self.server_listener.shutdown()
         print(f"Thread {self} stopped")
 
@@ -103,7 +135,16 @@ def user_handler(websocket: websockets.sync.server.ServerConnection) -> None:
     :param websocket: an object representing a connection with one client
     :type websocket: websockets.sync.server.ServerConnection
     :return None:"""
-    print("Client connected")
+    user = ServerUser()
+    try:
+        iden = MainServer.MAIN_SERVER.add_user(user)
+    except OverflowError:
+        print("Client cannot connected: too many users")
+        response = json.dumps({"command": -1, "result": None})
+        websocket.send(response)
+        return
+    user.id = iden
+    print(f"Client <{user.id}, {user.name}> connected")
     instruction_list = DEFAULT_COMMAND_SET
     try:
         for message in websocket:
@@ -129,6 +170,13 @@ def user_handler(websocket: websockets.sync.server.ServerConnection) -> None:
         print("Client disconnected incorrectly")
     except InterruptedError:
         print("Disconnected due to server stopping")
+    except TypeError as exception:
+        print(exception)
+    finally:
+        try:
+            MainServer.MAIN_SERVER.remove_user(user)
+        except KeyError as exception:
+            print(exception)
 
 
 def main() -> None:
