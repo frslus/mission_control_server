@@ -8,12 +8,23 @@ from test.MCPTesting import DEFAULT_COMMAND_SET, ServerInterruptMockup
 from src.MCPClient import ServerUser
 
 
+class ServerLockBank:
+    """A bunch of locks for MainServer for critical resources' protection.
+    :ivar active_users_lock: locks MainServer.__active_users
+    :type active_users_lock: threading.Lock
+    :ivar active_threads_lock: locks MainServer.__active_threads
+    :type active_threads_lock: threading.Lock"""
+    def __init__(self):
+        self.active_users_lock = threading.Lock()
+        self.active_threads_lock = threading.Lock()
+
+
 class MainServer:
     """An object representing server.
-    :ivar __max_users: the maximal number of users server can handle at a time
+    :ivar __max_users: the maximal number of users server can handle simultaneously
     :type __max_users: int
-    :ivar __active_users: an array of references to active users object instances TODO
-    :type __active_users: list[Any] TODO
+    :ivar __active_users: an array of references to active users object instances
+    :type __active_users: list[ServerUser | None]
     :ivar __active_threads: a set of threads to stop once the server is shut down
     :type __active_threads: set[threading.Thread]
     :ivar __command_set: a list of commands sent from client to the server
@@ -29,6 +40,7 @@ class MainServer:
         self.__active_threads = set()
         self.__command_set = DEFAULT_COMMAND_SET
         self.communication_port = 9000
+        self.lock_bank = ServerLockBank()
         MainServer.MAIN_SERVER = self
 
     def initiate_server(self) -> None:
@@ -67,21 +79,24 @@ class MainServer:
     def add_thread(self, thread) -> None:
         """Adds a new active thread.
         :return None:"""
-        self.__active_threads.add(thread)
+        with self.lock_bank.active_threads_lock:
+            self.__active_threads.add(thread)
 
-    def remove_thread(self, thread) -> None:
+    def remove_thread(self, thread: threading.Thread) -> None:
         """Removes an active thread.
         :return None:"""
-        if thread in self.__active_threads:
-            self.__active_threads.remove(thread)
-        else:
-            pass
+        with self.lock_bank.active_threads_lock:
+            if thread in self.__active_threads:
+                self.__active_threads.remove(thread)
+            else:
+                raise KeyError(f"User {thread} not found")
 
     def kill_all_threads(self) -> None:
         """Stops all active threads (most probably during server shutdown).
         :return None:"""
-        for thread in self.__active_threads:
-            thread.stop()
+        with self.lock_bank.active_threads_lock:
+            for thread in self.__active_threads:
+                thread.stop()
 
     def add_user(self, user: ServerUser) -> int:
         """Adds a new active user to the list. If no free slot, raises an OverflowError.
@@ -90,9 +105,10 @@ class MainServer:
         :return: user id on this server
         :rtype: int"""
         for i in range(self.__max_users):
-            if self.__active_users[i] is None:
-                self.__active_users[i] = user
-                return i
+            with self.lock_bank.active_threads_lock:
+                if self.__active_users[i] is None:
+                    self.__active_users[i] = user
+                    return i
         raise OverflowError("Too many users")
 
     def remove_user(self, user: ServerUser) -> None:
@@ -101,9 +117,10 @@ class MainServer:
         :type user: ServerUser
         :return: None"""
         for i in range(self.__max_users):
-            if type(self.__active_users[i]) == ServerUser and self.__active_users[i].id == user.id:
-                self.__active_users[i] = None
-                return
+            with self.lock_bank.active_threads_lock:
+                if type(self.__active_users[i]) == ServerUser and self.__active_users[i].id == user.id:
+                    self.__active_users[i] = None
+                    return
         raise KeyError(f"User {user.id} not found")
 
 
